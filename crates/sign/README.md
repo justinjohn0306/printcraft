@@ -36,10 +36,12 @@ for s in signatures(&doc, &bytes, &trust) {                                // li
   validity). `dss::embed` merges revocation evidence into the catalog's `/DSS` with `/VRI`
   entries keyed per signature (uppercase-hex SHA-1 of `/Contents`), deduplicating
   byte-identical blobs — sign → DSS → timestamp makes a B-LTA file, and the change classifier
-  treats the store as a permitted change. Evidence is caller-supplied DER: verifying OCSP
-  responses and CRLs themselves is the remaining LTV work.
+  treats the store as a permitted change. `revocation` parses and verifies RFC 5280 CRLs and
+  RFC 6960 OCSP responses (responder identity, OCSP-signing EKU for delegated responders,
+  CertID hash matching, validity windows); validation checks embedded evidence against the
+  signer's chain and a verified revocation invalidates the signature.
 
-Not yet: OCSP/CRL parsing and verification, revocation fetching, timestamp-server
+Not yet: revocation fetching (AIA/CRLDP extraction and a fetcher), timestamp-server
 configuration, FieldMDP locks, certificate security, OS key stores and PKCS #11 tokens.
 - **Validation:** `/ByteRange` and the CMS are read from the file's own bytes; the digest,
   the signature value and the signer's chain (against a `TrustStore`) are checked. Later

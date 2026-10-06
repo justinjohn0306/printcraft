@@ -15,6 +15,7 @@ pub mod keychain;
 pub mod keys;
 pub mod pdf;
 pub mod pkcs12;
+pub mod revocation;
 pub mod timestamp;
 pub mod x509;
 

@@ -120,6 +120,10 @@ pub struct Certificate {
     /// Key usage bits (bit 0 = digitalSignature, 1 = nonRepudiation, 5 = keyCertSign), if present.
     pub key_usage: Option<u16>,
     pub subject_key_id: Option<Vec<u8>>,
+    /// Authority key identifier (2.5.29.35), when present.
+    pub authority_key_id: Option<Vec<u8>>,
+    /// Extended key usage OIDs (2.5.29.37), when present.
+    pub extended_key_usage: Option<Vec<String>>,
 }
 
 impl Certificate {
@@ -141,6 +145,8 @@ impl Certificate {
         let mut is_ca = false;
         let mut key_usage = None;
         let mut subject_key_id = None;
+        let mut authority_key_id = None;
+        let mut extended_key_usage = None;
         for t in f {
             if t.tag != tag::ctx(3) {
                 continue;
@@ -170,6 +176,17 @@ impl Certificate {
                         }
                     }
                     "2.5.29.14" => subject_key_id = Some(Tlv::parse_all(value.value)?.value.to_vec()),
+                    // AuthorityKeyIdentifier: the [0] keyIdentifier inside.
+                    "2.5.29.35" => {
+                        authority_key_id =
+                            Tlv::parse_all(value.value)?.children()?.into_iter().find(|t| t.tag == tag::ctx(0)).map(|t| t.value.to_vec());
+                    }
+                    // ExtendedKeyUsage: a SEQUENCE OF OID.
+                    "2.5.29.37" => {
+                        let oids: Option<Vec<String>> =
+                            Tlv::parse_all(value.value)?.children()?.into_iter().map(|t| t.oid()).collect::<Result<_, _>>().ok();
+                        extended_key_usage = oids;
+                    }
                     _ => {}
                 }
             }
@@ -188,6 +205,8 @@ impl Certificate {
             is_ca,
             key_usage,
             subject_key_id,
+            authority_key_id,
+            extended_key_usage,
         })
     }
 

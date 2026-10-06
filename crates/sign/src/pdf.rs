@@ -462,6 +462,11 @@ fn validate_into(doc: &Document, bytes: &[u8], trust: &TrustStore, v: &Dict, inf
     let trusted = chain.iter().any(|c| trust.trusts(c));
     info.chain = chain;
     info.certificate = Some(cert.clone());
+    // Revocation evidence embedded in the document security store, if any. A verified
+    // revocation is final: later blocks must not soften the verdict.
+    let at = info.timestamp_time.or(info.signing_time);
+    let signer = info.chain.first().cloned();
+    let revoked = check_dss_revocation(doc, signer.as_ref(), &at, info);
     // Changes after signing.
     info.modification = if covered == bytes.len() || bytes[covered..].iter().all(|b| b.is_ascii_whitespace() || *b == 0) {
         Modification::None
@@ -495,12 +500,12 @@ fn validate_into(doc: &Document, bytes: &[u8], trust: &TrustStore, v: &Dict, inf
             "The signer's identity is unknown because it has not been included in your list of trusted certificates and none of its parent certificates are trusted certificates."
                 .into(),
         );
-        if !problems {
+        if !problems && !revoked {
             info.status = Status::Unknown;
         }
     } else {
         info.details.push("The signer's identity is valid.".into());
-        if !problems {
+        if !problems && !revoked {
             info.status = Status::Valid;
         }
     }
@@ -511,6 +516,74 @@ fn validate_into(doc: &Document, bytes: &[u8], trust: &TrustStore, v: &Dict, inf
     }
     if let Some(t) = info.timestamp_time {
         info.details.push(format!("The embedded timestamp token is valid; trusted time is {t}."));
+    }
+}
+
+/// Check the revocation evidence in the catalog's `/DSS` against the signer's chain at `at`.
+/// Only evidence whose signature verifies against the issuer counts; returns whether the
+/// certificate is revoked (which invalidates the signature).
+fn check_dss_revocation(doc: &Document, signer: Option<&Certificate>, at: &Option<Time>, info: &mut SignatureInfo) -> bool {
+    use crate::revocation::{CertificateList, OcspResponse, RevocationStatus};
+    let (Some(signer), Some(at)) = (signer, *at) else { return false };
+    let Some(root) = doc.root() else { return false };
+    let Some(dss) = doc.get(root).as_dict().and_then(|c| c.get(b"DSS").cloned()).map(|d| doc.resolve(&d)).and_then(|d| d.as_dict().cloned()) else {
+        return false;
+    };
+    let pull = |key: &[u8]| -> Vec<Vec<u8>> {
+        let mut out = Vec::new();
+        for item in dss.get(key).map(|o| doc.resolve(o)).and_then(|o| o.as_array().cloned()).unwrap_or_default() {
+            let o = doc.resolve(&item);
+            if let printcraft_cos::Object::Stream(s) = &*o
+                && let Ok(bytes) = s.decoded()
+            {
+                out.push(bytes);
+            }
+        }
+        out
+    };
+    let issuer = info.chain.get(1).unwrap_or(signer);
+    // A verified revocation wins; "good" from any covering evidence is reported, but never
+    // contradicts a revocation.
+    let mut revoked = None;
+    let mut covered = false;
+    let mut sources = Vec::new();
+    for r in pull(b"CRLs") {
+        let Ok(list) = CertificateList::parse(&r) else { continue };
+        sources.push("CRL");
+        match list.check(signer, issuer, at) {
+            RevocationStatus::Revoked { at } => {
+                revoked = Some(at);
+                break;
+            }
+            RevocationStatus::Good => covered = true,
+            RevocationStatus::Unknown => {}
+        }
+    }
+    if revoked.is_none() {
+        for r in pull(b"OCSPs") {
+            let Ok(resp) = OcspResponse::parse(&r) else { continue };
+            sources.push("OCSP");
+            match resp.check(signer, issuer, at) {
+                RevocationStatus::Revoked { at } => {
+                    revoked = Some(at);
+                    break;
+                }
+                RevocationStatus::Good => covered = true,
+                RevocationStatus::Unknown => {}
+            }
+        }
+    }
+    match revoked {
+        Some(at) => {
+            info.status = Status::Invalid;
+            info.details.push(format!("The signer's certificate has been revoked ({}, {}).", sources.join(", "), at));
+            true
+        }
+        None if covered => {
+            info.details.push("The document's embedded revocation information shows that the signer's certificate has not been revoked.".into());
+            false
+        }
+        None => false,
     }
 }
 

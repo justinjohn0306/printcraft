@@ -3,7 +3,7 @@
 use std::sync::Arc;
 
 use printcraft_cos::{Document, Object, PdfString, SaveOptions, write_incremental};
-use printcraft_sign::{Modification, SignError, SignOptions, Status, Time, TimestampAuthority, TrustStore, pkcs12, signatures};
+use printcraft_sign::{Modification, SignError, SignOptions, Status, Time, TimestampAuthority, TrustStore, der, pkcs12, signatures};
 
 fn data(name: &str) -> Vec<u8> {
     std::fs::read(format!("{}/tests/data/{name}", env!("CARGO_MANIFEST_DIR"))).unwrap()
@@ -318,6 +318,35 @@ fn sign_then_ltv_then_timestamp_makes_a_b_lta_file() {
     assert!(!allowed.contains(&"page content".to_string()), "{allowed:?}");
     let stamp = all.iter().find(|s| s.doc_timestamp).unwrap();
     assert_eq!(stamp.status, Status::Valid, "{:?}", stamp.details);
+}
+
+#[test]
+fn an_embedded_verified_revocation_invalidates_the_signature() {
+    use printcraft_sign::dss::{self, Evidence};
+    let id = pkcs12::open(&data("ec-p256.p12"), "test").unwrap();
+    let signed = printcraft_sign::sign(&open(&fixture()), &id, &opts()).unwrap();
+    // The signer's own CRL (self-signed test identity) revokes its certificate, in a window
+    // that covers the signing date (October 2026).
+    let (this, next) =
+        (Time { year: 2026, month: 1, day: 1, hour: 0, minute: 0, second: 0 }, Time { year: 2027, month: 1, day: 1, hour: 0, minute: 0, second: 0 });
+    let alg = id.key.signature_algorithm(printcraft_sign::DigestAlg::Sha256);
+    let tbs = der::seq(&[
+        &der::int(1),
+        &alg,
+        &id.certificate.subject.raw,
+        &this.encode(),
+        &next.encode(),
+        &der::seq(&[&der::seq(&[
+            &der::uint(&id.certificate.serial),
+            &Time { year: 2026, month: 6, day: 1, hour: 8, minute: 0, second: 0 }.encode(),
+        ])]),
+    ]);
+    let sig = id.key.sign(printcraft_sign::DigestAlg::Sha256, &tbs).unwrap();
+    let crl = der::seq(&[&tbs, &alg, &der::bit_string(&sig)]);
+    let ltv = dss::embed(&open(&signed), &Evidence { certs: Vec::new(), ocsps: Vec::new(), crls: vec![crl] }).unwrap();
+    let s = signatures(&open(&ltv), &ltv, &TrustStore::default()).into_iter().find(|s| s.signed && !s.doc_timestamp).unwrap();
+    assert_eq!(s.status, Status::Invalid, "{:?}", s.details);
+    assert!(s.details.iter().any(|d| d.contains("revoked") && d.contains("CRL")), "{:?}", s.details);
 }
 
 #[test]

@@ -154,12 +154,14 @@ fn ocsp(issuer: &pkcs12::DigitalId, status: RevocationStatus, this: Time, next: 
         &der::octets(&DigestAlg::Sha1.digest(&[&issuer.certificate.public_key.key_bits()])),
         &der::uint(&issuer.certificate.serial),
     ]);
+    // RFC 6960's real encodings: good [0] IMPLICIT NULL, revoked [1] IMPLICIT RevokedInfo,
+    // unknown [2] IMPLICIT; nextUpdate [0] EXPLICIT GeneralizedTime.
     let status = match status {
-        RevocationStatus::Good => der::tlv(tag::ctx(0), &[]),
-        RevocationStatus::Revoked { at } => der::tlv(tag::ctx(1), &der::seq(&[&at.encode()])),
-        RevocationStatus::Unknown => der::tlv(tag::ctx(2), &[]),
+        RevocationStatus::Good => der::tlv(tag::ctx_prim(0), &[]),
+        RevocationStatus::Revoked { at } => der::tlv(tag::ctx(1), &at.encode()),
+        RevocationStatus::Unknown => der::tlv(tag::ctx_prim(2), &[]),
     };
-    let single = der::seq(&[&cert_id, &status, &this.encode(), &next.encode()]);
+    let single = der::seq(&[&cert_id, &status, &this.encode(), &der::tlv(tag::ctx(0), &next.encode())]);
     let responder_id = der::tlv(tag::ctx(1), &issuer.certificate.subject.raw);
     let tbs = der::seq(&[&responder_id, &this.encode(), &der::seq(&[&single])]);
     let alg = issuer.key.signature_algorithm(DigestAlg::Sha256);

@@ -216,7 +216,7 @@ impl OcspResponse {
         let rid = f.next().ok_or_else(|| bad("ResponseData"))?;
         let responder_id = match rid.tag {
             t if t == tag::ctx(1) => ResponderId::ByName(rid.value.to_vec()),
-            t if t == tag::ctx(2) => ResponderId::ByKey(rid.value.to_vec()),
+            t if t == tag::ctx(2) => ResponderId::ByKey(Tlv::parse_all(rid.value)?.expect(tag::OCTET_STRING, "byKey responderID")?.value.to_vec()),
             _ => return Err(bad("responderID")),
         };
         let _produced_at = f.next().ok_or_else(|| bad("ResponseData"))?.time()?;
@@ -234,17 +234,20 @@ impl OcspResponse {
                 serial: serial.uint_bytes().to_vec(),
             };
             let status = match s.get(1).map(|t| t.tag) {
-                Some(t) if t == tag::ctx(0) => CertStatus::Good,
+                // RFC 6960 §4.2.1: CertStatus is CHOICE with IMPLICIT tags — good [0] NULL,
+                // revoked [1] RevokedInfo (the value is the RevokedInfo's own contents),
+                // unknown [2] UnknownInfo.
+                Some(t) if t == tag::ctx_prim(0) => CertStatus::Good,
                 Some(t) if t == tag::ctx(1) => {
-                    // revoked [1] EXPLICIT RevokedInfo { revocationDate, … }.
-                    let info = s.get(1).unwrap_or(&single).inner()?;
-                    let at = info.children()?.first().ok_or_else(|| bad("revoked status"))?.time()?;
-                    CertStatus::Revoked(at)
+                    let info = s.get(1).unwrap_or(&single);
+                    let (date, _) = Tlv::parse(info.value)?;
+                    CertStatus::Revoked(date.time()?)
                 }
-                _ => CertStatus::Unknown,
+                Some(t) if t == tag::ctx_prim(2) => CertStatus::Unknown,
+                _ => return Err(bad("certStatus")),
             };
             let this_update = s.get(2).ok_or_else(|| bad("SingleResponse"))?.time()?;
-            let next_update = s.get(3).filter(|t| t.tag == tag::UTC_TIME || t.tag == tag::GENERALIZED_TIME).map(|t| t.time()).transpose()?;
+            let next_update = s.get(3).filter(|t| t.tag == tag::ctx(0)).map(|t| t.inner().and_then(|g| g.time())).transpose()?;
             responses.push(SingleResponse { cert_id, status, this_update, next_update });
         }
         Ok(OcspResponse { tbs: tbs.raw.to_vec(), sig_alg: alg.raw.to_vec(), signature, responder_id, responses, responder_cert })
@@ -276,7 +279,7 @@ impl OcspResponse {
         let Some(responder) = responder else { return RevocationStatus::Unknown };
         // A delegated responder must carry the OCSP-signing EKU and be issued by the issuer.
         if responder.subject.raw != issuer.subject.raw {
-            if responder.issuer.raw != issuer.subject.raw {
+            if responder.issuer.raw != issuer.subject.raw || !responder.signed_by(&issuer.public_key) {
                 return RevocationStatus::Unknown;
             }
             if !responder.extended_key_usage.as_ref().is_some_and(|e| e.iter().any(|o| o == EKU_OCSP_SIGNING)) {

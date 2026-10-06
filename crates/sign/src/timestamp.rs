@@ -77,6 +77,11 @@ pub trait TimestampAuthority {
     fn timestamp(&self, request: &[u8]) -> Result<Vec<u8>, SignError>;
 }
 
+/// The certificates carried inside a token's CMS (for trust anchoring at validation time).
+pub fn token_certs(raw: &[u8]) -> Vec<Certificate> {
+    SignedData::parse(raw).map(|sd| sd.certificates).unwrap_or_default()
+}
+
 fn bad(message: impl Into<String>) -> SignError {
     SignError::Malformed(format!("RFC 3161: {}", message.into()))
 }

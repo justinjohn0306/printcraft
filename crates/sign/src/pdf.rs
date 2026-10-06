@@ -346,7 +346,7 @@ pub fn list_cached(doc: &Document, bytes: &[u8], trust: &TrustStore, cache: &Dig
             modification: Modification::None,
             details: Vec::new(),
         };
-        validate_doc_timestamp(doc, bytes, d, &mut info, cache);
+        validate_doc_timestamp(doc, bytes, d, &mut info, cache, trust);
         out.push(info);
     }
     out
@@ -589,7 +589,7 @@ fn check_dss_revocation(doc: &Document, signer: Option<&Certificate>, at: &Optio
 
 /// Validate a standalone document timestamp dictionary (`/ETSI.RFC3161`): the token must be
 /// cryptographically valid and its message imprint must cover the file's signed bytes.
-fn validate_doc_timestamp(doc: &Document, bytes: &[u8], v: &Dict, info: &mut SignatureInfo, cache: &DigestCache) {
+fn validate_doc_timestamp(doc: &Document, bytes: &[u8], v: &Dict, info: &mut SignatureInfo, cache: &DigestCache, trust: &TrustStore) {
     info.date = text(doc, v, b"M");
     let invalid = |info: &mut SignatureInfo, why: &str| {
         info.status = Status::Invalid;
@@ -646,10 +646,18 @@ fn validate_doc_timestamp(doc: &Document, bytes: &[u8], v: &Dict, info: &mut Sig
         }
     }
     if info.status != Status::Invalid {
-        info.status = Status::Valid;
-        info.details.push(
-            "The timestamp token is valid; the timestamp authority's certificate is embedded but not yet checked against a trust store.".into(),
-        );
+        // An untrusted TSA is not proof of anything: the verdict stays Unknown, like an
+        // ordinary signature from an unknown signer.
+        let mut pool = crate::timestamp::token_certs(&contents);
+        pool.extend(trust.certs.iter().cloned());
+        let trusted_tsa = token.signer_certificate().map(|c| build_chain(&c, &pool).iter().any(|x| trust.trusts(x))).unwrap_or(false);
+        if trusted_tsa {
+            info.status = Status::Valid;
+            info.details.push("The timestamp token is valid and its authority is trusted.".into());
+        } else {
+            info.status = Status::Unknown;
+            info.details.push("The timestamp token is valid, but the timestamp authority is not in your list of trusted certificates.".into());
+        }
     }
 }
 

@@ -356,7 +356,8 @@ pub fn try_oid(dotted: &str) -> Result<Vec<u8>, SignError> {
         tmp.reverse();
         body.extend(tmp);
     };
-    push(first * 40 + second);
+    let base = first.checked_mul(40).and_then(|b| b.checked_add(second)).ok_or_else(|| bad("invalid OID prefix"))?;
+    push(base);
     for arc in arcs {
         push(arc?);
     }

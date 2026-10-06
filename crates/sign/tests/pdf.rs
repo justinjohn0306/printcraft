@@ -234,7 +234,8 @@ fn a_document_timestamp_covers_the_file_and_validates() {
     };
     let stamped = printcraft_sign::timestamp_document(&open(&fixture()), &tsa, "D:20261006120000Z").unwrap();
     assert!(stamped.starts_with(&fixture()), "an incremental update");
-    let s = signatures(&open(&stamped), &stamped, &TrustStore::default()).into_iter().find(|s| s.doc_timestamp).unwrap();
+    let trust_tsa = TrustStore { certs: vec![tsa.id.certificate.clone()] };
+    let s = signatures(&open(&stamped), &stamped, &trust_tsa).into_iter().find(|s| s.doc_timestamp).unwrap();
     assert!(s.doc_timestamp && s.timestamp);
     assert_eq!(s.sub_filter.as_deref(), Some("ETSI.RFC3161"));
     assert_eq!(s.timestamp_time, Some(tsa.time));
@@ -251,7 +252,7 @@ fn a_document_timestamp_covers_the_file_and_validates() {
     let id = pkcs12::open(&data("ec-p256.p12"), "test").unwrap();
     let signed = printcraft_sign::sign(&open(&fixture()), &id, &opts()).unwrap();
     let both = printcraft_sign::timestamp_document(&open(&signed), &tsa, "D:20261006130000Z").unwrap();
-    let all = signatures(&open(&both), &both, &TrustStore::default());
+    let all = signatures(&open(&both), &both, &TrustStore { certs: vec![tsa.id.certificate.clone()] });
     let field = all.iter().find(|s| s.signed && !s.doc_timestamp).unwrap();
     let allowed = match &field.modification {
         Modification::Allowed(k) => k,
@@ -306,7 +307,7 @@ fn sign_then_ltv_then_timestamp_makes_a_b_lta_file() {
     let signed = printcraft_sign::sign(&open(&fixture()), &id, &opts()).unwrap();
     let ltv = dss::embed(&open(&signed), &Evidence { certs: vec![id.certificate.raw.clone()], ocsps: Vec::new(), crls: Vec::new() }).unwrap();
     let lta = printcraft_sign::timestamp_document(&open(&ltv), &tsa, "D:20261006120000Z").unwrap();
-    let all = signatures(&open(&lta), &lta, &TrustStore::default());
+    let all = signatures(&open(&lta), &lta, &TrustStore { certs: vec![tsa.id.certificate.clone()] });
     assert_eq!(all.iter().filter(|s| s.signed).count(), 2);
     let field = all.iter().find(|s| s.signed && !s.doc_timestamp).unwrap();
     assert_eq!(field.status, Status::Unknown);

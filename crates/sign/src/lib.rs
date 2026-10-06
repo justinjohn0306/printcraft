@@ -39,6 +39,8 @@ pub enum SignError {
     WrongPassword,
     #[error("{0}")]
     Crypto(String),
+    #[error("network: {0}")]
+    Network(String),
     #[error("{0}")]
     Pdf(String),
     #[error(transparent)]

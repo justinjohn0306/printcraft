@@ -2,7 +2,7 @@
 //! status lookup for evidence embedded in a DSS or supplied by the caller. Never fetches:
 //! the transport and the choice of evidence stay with the caller.
 
-use crate::der::{Tlv, tag};
+use crate::der::{self, Tlv, tag};
 use crate::keys::{self, DigestAlg, PublicKey};
 use crate::x509::Certificate;
 use crate::{SignError, Time};
@@ -302,4 +302,17 @@ impl OcspResponse {
             CertStatus::Unknown => RevocationStatus::Unknown,
         }
     }
+}
+
+/// Build an OCSP `OCSPRequest` naming `cert` as issued by `issuer` (RFC 6960 Appendix B),
+/// for the caller to POST to an AIA responder URL.
+pub fn build_ocsp_request(cert: &Certificate, issuer: &Certificate) -> Result<Vec<u8>, SignError> {
+    let cert_id = der::seq(&[
+        &DigestAlg::Sha1.algorithm(),
+        &der::octets(&DigestAlg::Sha1.digest(&[&cert.issuer.raw])),
+        &der::octets(&DigestAlg::Sha1.digest(&[&issuer.public_key.key_bits()])),
+        &der::uint(&cert.serial),
+    ]);
+    // TBSRequest { requestList: [ Request { reqCert } ] } — version defaults to v1.
+    Ok(der::seq(&[&der::seq(&[&der::seq(&[&cert_id])])]))
 }

@@ -1689,6 +1689,8 @@ pub struct Session {
     trust: Arc<TrustStore>,
     /// Preferences ▸ JavaScript ▸ Enable Acrobat JavaScript, inverted (on by default).
     js_off: bool,
+    /// The default RFC 3161 timestamp server (Preferences ▸ Signatures ▸ Timestamp servers).
+    timestamp_server: Option<String>,
 }
 
 /// Validate the signature fields of `cos` (written as `bytes`).
@@ -2366,6 +2368,17 @@ impl Session {
                 doc.signatures = signatures_of(&e.cos, &doc.bytes, &doc.trust, &doc.sig_cache);
             }
         }
+    }
+
+    /// The configured default RFC 3161 timestamp server, if any.
+    pub fn timestamp_server(&self) -> Option<&str> {
+        self.timestamp_server.as_deref()
+    }
+
+    /// Set (or clear) the default RFC 3161 timestamp server. Runtime preference, like the
+    /// trusted certificates; the server is contacted only when a tool stamps something.
+    pub fn set_timestamp_server(&mut self, url: Option<String>) {
+        self.timestamp_server = url;
     }
 
     /// The signing time as a PDF date in local time with its offset (`D:…+02'00'`).

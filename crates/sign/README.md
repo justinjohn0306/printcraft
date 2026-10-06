@@ -41,8 +41,14 @@ for s in signatures(&doc, &bytes, &trust) {                                // li
   CertID hash matching, validity windows); validation checks embedded evidence against the
   signer's chain and a verified revocation invalidates the signature.
 
-Not yet: revocation fetching (AIA/CRLDP extraction and a fetcher), timestamp-server
-configuration, FieldMDP locks, certificate security, OS key stores and PKCS #11 tokens.
+Headless use: `sign_timestamp_server` configures the default server (https, or http on the
+loopback), `sign_document` takes `timestamp: true`, `doc_timestamp` stamps a file, and
+`sign_ltv` fetches OCSP/CRL evidence from the chain's AIA/CRLDP URLs and embeds a DSS. The
+fetcher lives in the automation crate (`net`, ureq over rustls, 15 s timeout, 4 MiB cap,
+redirects off); the `sign` crate itself stays network-free.
+
+Not yet: timestamp-server persistence to the preferences file, a UI dialog, FieldMDP locks,
+certificate security, OS key stores and PKCS #11 tokens.
 - **Validation:** `/ByteRange` and the CMS are read from the file's own bytes; the digest,
   the signature value and the signer's chain (against a `TrustStore`) are checked. Later
   revisions are diffed against the signed one, and the changes are classified (signing, form

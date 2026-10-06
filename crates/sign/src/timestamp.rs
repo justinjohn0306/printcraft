@@ -64,6 +64,14 @@ pub struct TimestampToken {
     pub gen_time: Time,
 }
 
+impl TimestampToken {
+    /// The TSA's certificate, from the token's embedded certificates.
+    pub fn signer_certificate(&self) -> Option<Certificate> {
+        let token = SignedData::parse(&self.raw).ok()?;
+        token.signer_certificate().cloned()
+    }
+}
+
 /// A caller-supplied transport. The sign crate never creates sockets.
 pub trait TimestampAuthority {
     fn timestamp(&self, request: &[u8]) -> Result<Vec<u8>, SignError>;

@@ -227,6 +227,100 @@ fn a_malformed_timestamp_response_fails_signing_without_a_file() {
 }
 
 #[test]
+fn a_document_timestamp_covers_the_file_and_validates() {
+    let tsa = TestTsa {
+        id: pkcs12::open(&data("rsa-aes.p12"), "test").unwrap(),
+        time: Time { year: 2026, month: 10, day: 6, hour: 12, minute: 0, second: 0 },
+    };
+    let stamped = printcraft_sign::timestamp_document(&open(&fixture()), &tsa, "D:20261006120000Z").unwrap();
+    assert!(stamped.starts_with(&fixture()), "an incremental update");
+    let s = signatures(&open(&stamped), &stamped, &TrustStore::default()).into_iter().find(|s| s.doc_timestamp).unwrap();
+    assert!(s.doc_timestamp && s.timestamp);
+    assert_eq!(s.sub_filter.as_deref(), Some("ETSI.RFC3161"));
+    assert_eq!(s.timestamp_time, Some(tsa.time));
+    assert_eq!(s.status, Status::Valid, "{:?}", s.details);
+    assert_eq!(s.modification, Modification::None);
+    assert_eq!(s.signed_len, stamped.len());
+    // A later byte change breaks the timestamp's imprint.
+    let mut tampered = stamped.clone();
+    let i = tampered.windows(13).position(|w| w == b"Contract text").unwrap();
+    tampered[i] = b'K';
+    let s = signatures(&open(&tampered), &tampered, &TrustStore::default()).into_iter().find(|s| s.doc_timestamp).unwrap();
+    assert_eq!(s.status, Status::Invalid);
+    // Combined with a field signature: both are listed, the stamp covers both revisions.
+    let id = pkcs12::open(&data("ec-p256.p12"), "test").unwrap();
+    let signed = printcraft_sign::sign(&open(&fixture()), &id, &opts()).unwrap();
+    let both = printcraft_sign::timestamp_document(&open(&signed), &tsa, "D:20261006130000Z").unwrap();
+    let all = signatures(&open(&both), &both, &TrustStore::default());
+    let field = all.iter().find(|s| s.signed && !s.doc_timestamp).unwrap();
+    let allowed = match &field.modification {
+        Modification::Allowed(k) => k,
+        other => panic!("{other:?}"),
+    };
+    assert!(allowed.contains(&"signature".to_string()), "{allowed:?}");
+    let stamp = all.iter().find(|s| s.doc_timestamp).unwrap();
+    assert_eq!(stamp.status, Status::Valid, "{:?}", stamp.details);
+}
+
+#[test]
+fn embedding_ltv_evidence_adds_a_dss_and_keeps_signatures_valid() {
+    use printcraft_sign::dss::{self, Evidence};
+    let id = pkcs12::open(&data("ec-p256.p12"), "test").unwrap();
+    let signed = printcraft_sign::sign(&open(&fixture()), &id, &opts()).unwrap();
+    let evidence =
+        Evidence { certs: vec![id.certificate.raw.clone()], ocsps: vec![b"synthetic ocsp".to_vec()], crls: vec![b"synthetic crl".to_vec()] };
+    let ltv = dss::embed(&open(&signed), &evidence).unwrap();
+    assert!(ltv.starts_with(&signed), "incremental");
+    let doc = open(&ltv);
+    // The store is in the catalog with one certificate and the /VRI entry for the signature.
+    let root = doc.root().unwrap();
+    let dss_dict: printcraft_cos::Dict =
+        doc.get(root).as_dict().unwrap().get(b"DSS").map(|d| doc.resolve(d)).and_then(|d| d.as_dict().cloned()).unwrap();
+    assert_eq!(dss_dict.name(b"Type"), Some(b"DSS".as_slice()));
+    assert!(dss_dict.contains(b"Certs") && dss_dict.contains(b"OCSPs") && dss_dict.contains(b"CRLs") && dss_dict.contains(b"VRI"));
+    // The earlier signature still validates; the DSS counts as a permitted change.
+    let s = signatures(&doc, &ltv, &TrustStore::default()).into_iter().find(|s| s.signed && !s.doc_timestamp).unwrap();
+    assert_eq!(s.status, Status::Unknown);
+    let allowed = match &s.modification {
+        Modification::Allowed(k) => k,
+        other => panic!("{other:?}"),
+    };
+    assert!(allowed.contains(&"document security store".to_string()), "{allowed:?}");
+    // Embedding twice keeps one certificate (byte-identical dedup) and stays valid.
+    let twice = dss::embed(&doc, &evidence).unwrap();
+    let doc2 = open(&twice);
+    let dss2: printcraft_cos::Dict =
+        doc2.get(doc2.root().unwrap()).as_dict().unwrap().get(b"DSS").map(|d| doc2.resolve(d)).and_then(|d| d.as_dict().cloned()).unwrap();
+    let certs = dss2.get(b"Certs").map(|c| doc2.resolve(c)).and_then(|c| c.as_array().cloned()).unwrap();
+    assert_eq!(certs.len(), 1, "byte-identical evidence is not duplicated");
+}
+
+#[test]
+fn sign_then_ltv_then_timestamp_makes_a_b_lta_file() {
+    use printcraft_sign::dss::{self, Evidence};
+    let id = pkcs12::open(&data("ec-p256.p12"), "test").unwrap();
+    let tsa = TestTsa {
+        id: pkcs12::open(&data("rsa-aes.p12"), "test").unwrap(),
+        time: Time { year: 2026, month: 10, day: 6, hour: 12, minute: 0, second: 0 },
+    };
+    let signed = printcraft_sign::sign(&open(&fixture()), &id, &opts()).unwrap();
+    let ltv = dss::embed(&open(&signed), &Evidence { certs: vec![id.certificate.raw.clone()], ocsps: Vec::new(), crls: Vec::new() }).unwrap();
+    let lta = printcraft_sign::timestamp_document(&open(&ltv), &tsa, "D:20261006120000Z").unwrap();
+    let all = signatures(&open(&lta), &lta, &TrustStore::default());
+    assert_eq!(all.iter().filter(|s| s.signed).count(), 2);
+    let field = all.iter().find(|s| s.signed && !s.doc_timestamp).unwrap();
+    assert_eq!(field.status, Status::Unknown);
+    let allowed = match &field.modification {
+        Modification::Allowed(k) => k,
+        other => panic!("{other:?}"),
+    };
+    assert!(allowed.contains(&"document security store".to_string()) && allowed.contains(&"signature".to_string()), "{allowed:?}");
+    assert!(!allowed.contains(&"page content".to_string()), "{allowed:?}");
+    let stamp = all.iter().find(|s| s.doc_timestamp).unwrap();
+    assert_eq!(stamp.status, Status::Valid, "{:?}", stamp.details);
+}
+
+#[test]
 fn validates_a_signature_made_by_openssl() {
     let bytes = data("openssl-signed.pdf");
     let doc = open(&bytes);

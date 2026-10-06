@@ -2410,6 +2410,23 @@ impl Session {
         Ok(Arc::new(printcraft_sign::sign_with_timestamp(&editor.cos, id, &opts, tsa)?))
     }
 
+    /// Append a standalone document timestamp (RFC 3161, `/ETSI.RFC3161`) covering the file's
+    /// current state. An empty `date` takes the session clock; the transport is the caller's.
+    pub fn timestamp_document(&self, doc: DocId, tsa: &dyn printcraft_sign::TimestampAuthority, date: String) -> Result<Arc<Vec<u8>>, EditError> {
+        let d = self.get(doc).ok_or(EditError::NoDocument)?;
+        let editor = d.editor.as_ref().ok_or_else(|| EditError::ReadOnly(d.read_only_reason.clone().unwrap_or_default()))?;
+        let date = if date.is_empty() { self.signing_date() } else { date };
+        Ok(Arc::new(printcraft_sign::timestamp_document(&editor.cos, tsa, &date)?))
+    }
+
+    /// Embed revocation evidence into the catalog's `/DSS` with `/VRI` entries per signature
+    /// (PAdES B-LT): an incremental update that never rewrites signed bytes.
+    pub fn embed_ltv(&self, doc: DocId, evidence: &printcraft_sign::dss::Evidence) -> Result<Arc<Vec<u8>>, EditError> {
+        let d = self.get(doc).ok_or(EditError::NoDocument)?;
+        let editor = d.editor.as_ref().ok_or_else(|| EditError::ReadOnly(d.read_only_reason.clone().unwrap_or_default()))?;
+        Ok(Arc::new(printcraft_sign::dss::embed(&editor.cos, evidence)?))
+    }
+
     /// Record that the signed file `bytes` was saved (to `path`): like [`Session::mark_saved`],
     /// and the edit history before signing is dropped (signing can't be undone).
     pub fn mark_signed(&mut self, id: DocId, bytes: Arc<Vec<u8>>, path: Option<String>) -> Result<(), EditError> {

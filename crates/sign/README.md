@@ -27,12 +27,20 @@ for s in signatures(&doc, &bytes, &trust) {                                // li
   responses and TSTInfo tokens (size-capped, imprint- and signature-checked). `sign_with_timestamp`
   attaches the TSA's token as an unsigned attribute over the signature value; the transport is
   the caller's (`TimestampAuthority` — this crate never opens a socket). Validation verifies
-  embedded tokens and reports the trusted time in `SignatureInfo::timestamp_time`.
-  `timestamp::respond` is the TSA-side signer behind the deterministic test authority.
+  embedded tokens and reports the trusted time in `SignatureInfo::timestamp_time`, which also
+  anchors certificate-validity checks. `timestamp::respond` is the TSA-side signer behind the
+  deterministic test authority.
+- **Document timestamps and LTV:** `timestamp_document` appends a standalone RFC 3161
+  document timestamp (`/ETSI.RFC3161`) covering the whole file; validation discovers and
+  verifies these dictionaries (imprint over the signed bytes, token signature, TSA cert
+  validity). `dss::embed` merges revocation evidence into the catalog's `/DSS` with `/VRI`
+  entries keyed per signature (uppercase-hex SHA-1 of `/Contents`), deduplicating
+  byte-identical blobs — sign → DSS → timestamp makes a B-LTA file, and the change classifier
+  treats the store as a permitted change. Evidence is caller-supplied DER: verifying OCSP
+  responses and CRLs themselves is the remaining LTV work.
 
-Not yet: LTV (DSS/VRI, OCSP, CRL), the standalone document timestamp (`/ETSI.RFC3161`),
-timestamp-server configuration and fetchers, FieldMDP locks, certificate security, OS key
-stores and PKCS #11 tokens.
+Not yet: OCSP/CRL parsing and verification, revocation fetching, timestamp-server
+configuration, FieldMDP locks, certificate security, OS key stores and PKCS #11 tokens.
 - **Validation:** `/ByteRange` and the CMS are read from the file's own bytes; the digest,
   the signature value and the signer's chain (against a `TrustStore`) are checked. Later
   revisions are diffed against the signed one, and the changes are classified (signing, form

@@ -6011,11 +6011,11 @@ title = "PAdES B-T (signature timestamp)"
 area = "H"
 tier = "P1"
 milestone = "M9"
-status = "planned"
+status = "partial"
 commands = []
 tools = []
-evidence = []
-notes = ""
+evidence = ["crates/sign/tests/pdf.rs::signing_with_a_timestamp_embeds_a_verified_rfc3161_token"]
+notes = "Sign with an embedded RFC 3161 token (sign_with_timestamp): imprint and TSA signature verified at signing and validation time, trusted time reported. Missing: timestamp-server configuration and a fetcher (transport is caller-injected), the standalone document timestamp, automation tool."
 
 [[feature]]
 id = "sign.ltv"

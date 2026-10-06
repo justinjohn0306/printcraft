@@ -3,7 +3,7 @@
 use std::sync::Arc;
 
 use printcraft_cos::{Document, Object, PdfString, SaveOptions, write_incremental};
-use printcraft_sign::{Modification, SignOptions, Status, TrustStore, pkcs12, signatures};
+use printcraft_sign::{Modification, SignError, SignOptions, Status, Time, TimestampAuthority, TrustStore, pkcs12, signatures};
 
 fn data(name: &str) -> Vec<u8> {
     std::fs::read(format!("{}/tests/data/{name}", env!("CARGO_MANIFEST_DIR"))).unwrap()
@@ -168,6 +168,62 @@ fn invisible_signatures_and_refusals() {
     assert!(!s.visible);
     assert!(printcraft_sign::sign(&open(&fixture()), &id, &SignOptions { page: 5, ..opts() }).is_err());
     assert_eq!(printcraft_sign::pdf::display_date("D:20261002120000+01'00'"), "2026.10.02 12:00:00 +01'00'");
+}
+
+/// A deterministic TSA: signs an RFC 3161 response locally with a test digital ID at a fixed
+/// time. No sockets; the whole stamping path runs in-process.
+struct TestTsa {
+    id: pkcs12::DigitalId,
+    time: Time,
+}
+
+impl TimestampAuthority for TestTsa {
+    fn timestamp(&self, request: &[u8]) -> Result<Vec<u8>, SignError> {
+        let q = printcraft_sign::timestamp::parse_request(request)?;
+        printcraft_sign::timestamp::respond(
+            &self.id.key,
+            &self.id.certificate,
+            &self.id.chain,
+            printcraft_sign::DigestAlg::Sha256,
+            &q,
+            "1.2.3.4",
+            self.time,
+            7,
+        )
+    }
+}
+
+#[test]
+fn signing_with_a_timestamp_embeds_a_verified_rfc3161_token() {
+    let id = pkcs12::open(&data("ec-p256.p12"), "test").unwrap();
+    let tsa = TestTsa {
+        id: pkcs12::open(&data("rsa-aes.p12"), "test").unwrap(),
+        time: Time { year: 2026, month: 10, day: 6, hour: 12, minute: 0, second: 0 },
+    };
+    let signed = printcraft_sign::sign_with_timestamp(&open(&fixture()), &id, &opts(), &tsa).unwrap();
+    assert!(signed.starts_with(&fixture()), "still an incremental update");
+    let anchor = id.chain.first().cloned().unwrap_or_else(|| id.certificate.clone());
+    let s = signatures(&open(&signed), &signed, &TrustStore { certs: vec![anchor] }).into_iter().find(|s| s.signed).unwrap();
+    assert_eq!(s.status, Status::Valid, "{:?}", s.details);
+    assert!(s.timestamp, "{:?}", s.details);
+    assert_eq!(s.timestamp_time, Some(tsa.time), "the token's generation time, verified over the signature value");
+    assert!(s.details.iter().any(|d| d.contains("trusted time")), "{:?}", s.details);
+    // Untrusted, the signature stays intact-but-unknown; the timestamp is still reported.
+    let s = signatures(&open(&signed), &signed, &TrustStore::default()).into_iter().find(|s| s.signed).unwrap();
+    assert_eq!(s.status, Status::Unknown);
+    assert_eq!(s.timestamp_time, Some(tsa.time));
+}
+
+#[test]
+fn a_malformed_timestamp_response_fails_signing_without_a_file() {
+    struct Bad;
+    impl TimestampAuthority for Bad {
+        fn timestamp(&self, _request: &[u8]) -> Result<Vec<u8>, SignError> {
+            Ok(b"not der".to_vec())
+        }
+    }
+    let id = pkcs12::open(&data("ec-p256.p12"), "test").unwrap();
+    assert!(printcraft_sign::sign_with_timestamp(&open(&fixture()), &id, &opts(), &Bad).is_err());
 }
 
 #[test]

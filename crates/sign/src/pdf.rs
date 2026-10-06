@@ -148,9 +148,12 @@ pub struct SignatureInfo {
     pub revision: usize,
     /// Length of the signed revision (bytes) — "View signed version".
     pub signed_len: usize,
+    /// Digest algorithm used for the document's signed bytes.
     pub digest: Option<DigestAlg>,
     pub algorithm: Option<String>,
     pub timestamp: bool,
+    /// RFC 3161 generation time, when the embedded token was validated.
+    pub timestamp_time: Option<Time>,
     pub status: Status,
     pub modification: Modification,
     /// Acrobat-style sentences explaining the verdict.
@@ -288,6 +291,7 @@ pub fn list_cached(doc: &Document, bytes: &[u8], trust: &TrustStore, cache: &Dig
             digest: None,
             algorithm: None,
             timestamp: false,
+            timestamp_time: None,
             status: Status::Unknown,
             modification: Modification::None,
             details: Vec::new(),
@@ -365,6 +369,19 @@ fn validate_into(doc: &Document, bytes: &[u8], trust: &TrustStore, v: &Dict, inf
     let s = &sd.signer;
     info.digest = Some(s.digest);
     info.timestamp = s.timestamp;
+    if let Some(raw) = &s.timestamp_token {
+        match crate::timestamp::parse_token(raw) {
+            Ok(t) => {
+                let imprint = t.digest.digest(&[&s.signature]);
+                if imprint == t.imprint {
+                    info.timestamp_time = Some(t.gen_time);
+                } else {
+                    info.details.push("The signature's timestamp token does not cover the signature value.".into());
+                }
+            }
+            Err(e) => info.details.push(format!("The signature's timestamp token could not be verified ({e}).")),
+        }
+    }
     // The digest the signature commits to.
     let content_digest = match &sd.content {
         // adbe.pkcs7.sha1: the document's SHA-1 digest is the signed content.
@@ -443,6 +460,9 @@ fn validate_into(doc: &Document, bytes: &[u8], trust: &TrustStore, v: &Dict, inf
         info.details.push("The signature includes an embedded timestamp.".into());
     } else {
         info.details.push("Signing time is from the clock on the signer's computer.".into());
+    }
+    if let Some(t) = info.timestamp_time {
+        info.details.push(format!("The embedded timestamp token is valid; trusted time is {t}."));
     }
 }
 
@@ -683,13 +703,39 @@ const BR_MARK: [i64; 3] = [1_111_111_111, 2_222_222_222, 3_333_333_333];
 
 /// Sign `doc` with `id`; returns the signed file (an incremental update when possible).
 pub fn sign(doc: &Document, id: &DigitalId, opts: &SignOptions) -> Result<Vec<u8>, SignError> {
+    sign_inner(doc, id, opts, None)
+}
+
+/// Sign and embed an RFC 3161 signature timestamp from `tsa` (PAdES B-T). The transport is the
+/// caller's: this crate never opens a socket, and a rejected or malformed token fails the
+/// signing before any file is produced.
+pub fn sign_with_timestamp(
+    doc: &Document,
+    id: &DigitalId,
+    opts: &SignOptions,
+    tsa: &dyn crate::timestamp::TimestampAuthority,
+) -> Result<Vec<u8>, SignError> {
+    sign_inner(doc, id, opts, Some(tsa))
+}
+
+/// Extra `/Contents` headroom for an attached RFC 3161 token (a TSA response with its
+/// certificate chain is typically 4–8 KiB; the token is also size-capped on parsing).
+const TOKEN_RESERVE: usize = 16 * 1024;
+
+fn sign_inner(
+    doc: &Document,
+    id: &DigitalId,
+    opts: &SignOptions,
+    tsa: Option<&dyn crate::timestamp::TimestampAuthority>,
+) -> Result<Vec<u8>, SignError> {
     if doc.security().is_some() || doc.output_handler().is_some() {
         return Err(SignError::Unsupported("signing encrypted documents".into()));
     }
     let mut doc = doc.clone();
     let root = doc.root().ok_or_else(|| SignError::Pdf("the document has no catalog".into()))?;
     let alg = id.key.preferred_digest();
-    let reserve = 8192 + id.certificate.raw.len() + id.chain.iter().map(|c| c.raw.len()).sum::<usize>();
+    let reserve =
+        8192 + id.certificate.raw.len() + id.chain.iter().map(|c| c.raw.len()).sum::<usize>() + if tsa.is_some() { TOKEN_RESERVE } else { 0 };
     let name = id.certificate.display_name();
     // The signature dictionary.
     let mut v = Dict::new();
@@ -832,7 +878,19 @@ pub fn sign(doc: &Document, id: &DigitalId, opts: &SignOptions) -> Result<Vec<u8
     br_text.resize(width, b' ');
     out[br_at..br_at + width].copy_from_slice(&br_text);
     let digest = alg.digest(&[&out[..start], &out[end..]]);
-    let cms = crate::cms::sign_detached(&id.key, &id.certificate, &id.chain, alg, &digest)?;
+    let base = crate::cms::sign_detached(&id.key, &id.certificate, &id.chain, alg, &digest)?;
+    let cms = match tsa {
+        None => base,
+        Some(t) => {
+            // The imprint covers the signature value, which attaching an unsigned attribute
+            // does not change (PAdES B-T).
+            let sd = SignedData::parse(&base)?;
+            let q = crate::timestamp::TimestampQuery::new(DigestAlg::Sha256, DigestAlg::Sha256.digest(&[&sd.signer.signature]))?;
+            let resp = t.timestamp(&q.encode()?)?;
+            let token = crate::timestamp::parse_response(&resp, &q)?;
+            crate::cms::attach_timestamp_token(&base, &token.raw)?
+        }
+    };
     if cms.len() > reserve {
         return Err(SignError::Pdf("the signature does not fit its placeholder".into()));
     }

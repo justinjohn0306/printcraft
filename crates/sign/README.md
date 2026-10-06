@@ -23,14 +23,21 @@ for s in signatures(&doc, &bytes, &trust) {                                // li
   or invisible); certification with DocMDP P=1/2/3. The document is written incrementally
   with a zero-filled `/Contents` and fixed-width `/ByteRange`, which are then patched in
   place. Encrypted documents are refused for now.
+- **Timestamps (PAdES B-T):** the `timestamp` module builds and parses RFC 3161 requests,
+  responses and TSTInfo tokens (size-capped, imprint- and signature-checked). `sign_with_timestamp`
+  attaches the TSA's token as an unsigned attribute over the signature value; the transport is
+  the caller's (`TimestampAuthority` — this crate never opens a socket). Validation verifies
+  embedded tokens and reports the trusted time in `SignatureInfo::timestamp_time`.
+  `timestamp::respond` is the TSA-side signer behind the deterministic test authority.
+
+Not yet: LTV (DSS/VRI, OCSP, CRL), the standalone document timestamp (`/ETSI.RFC3161`),
+timestamp-server configuration and fetchers, FieldMDP locks, certificate security, OS key
+stores and PKCS #11 tokens.
 - **Validation:** `/ByteRange` and the CMS are read from the file's own bytes; the digest,
   the signature value and the signer's chain (against a `TrustStore`) are checked. Later
   revisions are diffed against the signed one, and the changes are classified (signing, form
   fill, comments, metadata, page content, document structure) under the DocMDP permissions.
   The verdict follows Acrobat: valid, unknown (intact but the identity isn't trusted) or invalid.
-
-Not yet: RFC 3161 timestamps, LTV (DSS/VRI, OCSP, CRL), FieldMDP locks, certificate security,
-OS key stores and PKCS #11 tokens.
 
 Oracles: poppler's `pdfsig` reports our signatures valid; OpenSSL reads our `.p12` files and
 verifies our CMS; `tests/data/openssl-signed.pdf` is a signature OpenSSL made, which we validate.

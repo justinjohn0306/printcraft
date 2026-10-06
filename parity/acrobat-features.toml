@@ -6026,8 +6026,8 @@ milestone = "M9"
 status = "partial"
 commands = []
 tools = []
-evidence = ["crates/sign/tests/pdf.rs::embedding_ltv_evidence_adds_a_dss_and_keeps_signatures_valid"]
-notes = "dss::embed merges caller-supplied evidence (certs, OCSP responses, CRLs) into the catalog /DSS with /VRI entries per signature, deduplicating blobs, as a permitted incremental change. Missing: verifying the OCSP/CRL evidence itself (revocation.rs), fetching, automation tool."
+evidence = ["crates/sign/tests/pdf.rs::embedding_ltv_evidence_adds_a_dss_and_keeps_signatures_valid", "crates/sign/tests/pdf.rs::an_embedded_verified_revocation_invalidates_the_signature"]
+notes = "dss::embed merges caller-supplied evidence into the catalog /DSS with /VRI entries per signature, deduplicating blobs, as a permitted incremental change; revocation.rs verifies the embedded CRLs and OCSP responses (signature, responder identity, CertID, window) and a verified revocation invalidates the signature. Missing: fetching evidence, automation tool."
 
 [[feature]]
 id = "sign.pades-blta"
@@ -6047,11 +6047,11 @@ title = "Revocation checking (OCSP and CRL)"
 area = "H"
 tier = "P1"
 milestone = "M9"
-status = "planned"
+status = "partial"
 commands = []
 tools = []
-evidence = []
-notes = ""
+evidence = ["crates/sign/tests/crypto.rs::crls_verify_and_report_revocation", "crates/sign/tests/crypto.rs::ocsp_responses_verify_and_match_the_certificate", "crates/sign/tests/pdf.rs::an_embedded_verified_revocation_invalidates_the_signature"]
+notes = "RFC 5280 CRLs and RFC 6960 OCSP responses are parsed and verified (issuer/responder signature, delegated responder's OCSP-signing EKU, CertID hash match, validity window) and checked against the DSS during validation. Missing: network fetching of fresh evidence and the OS trust store."
 
 [[feature]]
 id = "sign.validate-all"

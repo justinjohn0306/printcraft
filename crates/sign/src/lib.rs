@@ -14,12 +14,16 @@ pub mod keychain;
 pub mod keys;
 pub mod pdf;
 pub mod pkcs12;
+pub mod timestamp;
 pub mod x509;
 
 pub use der::Time;
 pub use keys::{DigestAlg, PrivateKey, PublicKey};
-pub use pdf::{Appearance, DigestCache, Modification, SignOptions, SignatureInfo, Status, TrustStore, list as signatures, sign, validate};
+pub use pdf::{
+    Appearance, DigestCache, Modification, SignOptions, SignatureInfo, Status, TrustStore, list as signatures, sign, sign_with_timestamp, validate,
+};
 pub use pkcs12::DigitalId;
+pub use timestamp::{TimestampAuthority, TimestampQuery, TimestampToken};
 pub use x509::{Certificate, Name};
 
 #[derive(Debug, thiserror::Error)]

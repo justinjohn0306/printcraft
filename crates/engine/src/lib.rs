@@ -2393,6 +2393,23 @@ impl Session {
         Ok(Arc::new(printcraft_sign::sign(&editor.cos, id, &opts)?))
     }
 
+    /// [`Session::sign`], embedding an RFC 3161 signature timestamp (PAdES B-T) produced by
+    /// `tsa`. The transport lives with the caller; the engine never opens a socket.
+    pub fn sign_with_timestamp(
+        &self,
+        doc: DocId,
+        id: &printcraft_sign::DigitalId,
+        mut opts: SignOptions,
+        tsa: &dyn printcraft_sign::TimestampAuthority,
+    ) -> Result<Arc<Vec<u8>>, EditError> {
+        let d = self.get(doc).ok_or(EditError::NoDocument)?;
+        let editor = d.editor.as_ref().ok_or_else(|| EditError::ReadOnly(d.read_only_reason.clone().unwrap_or_default()))?;
+        if opts.date.is_empty() {
+            opts.date = self.signing_date();
+        }
+        Ok(Arc::new(printcraft_sign::sign_with_timestamp(&editor.cos, id, &opts, tsa)?))
+    }
+
     /// Record that the signed file `bytes` was saved (to `path`): like [`Session::mark_saved`],
     /// and the edit history before signing is dropped (signing can't be undone).
     pub fn mark_signed(&mut self, id: DocId, bytes: Arc<Vec<u8>>, path: Option<String>) -> Result<(), EditError> {

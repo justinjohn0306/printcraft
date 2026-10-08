@@ -6194,8 +6194,8 @@ milestone = "M9"
 status = "partial"
 commands = []
 tools = []
-evidence = ["crates/sign/tests/pdf.rs::signing_with_a_timestamp_embeds_a_verified_rfc3161_token"]
-notes = "Validation prefers the verified RFC 3161 timestamp time over /M when checking certificate validity and reports it as trusted time. Missing: an explicit verification-time option (verify at a chosen date / now) in the validation API."
+evidence = ["crates/sign/tests/pdf.rs::signing_with_a_timestamp_embeds_a_verified_rfc3161_token", "crates/sign/tests/pdf.rs::an_untrusted_timestamp_does_not_set_the_validation_time"]
+notes = "Validation prefers the verified RFC 3161 timestamp time over /M when checking certificate validity and revocation, but only when the TSA chains to the trust store; an untrusted token is reported as an unverified timestamp and its time is not used. Missing: an explicit verification-time option (verify at a chosen date / now) in the validation API."
 
 [[feature]]
 id = "sign.changes-after-signing"

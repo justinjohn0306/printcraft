@@ -140,7 +140,9 @@ pub fn parse_token(raw: &[u8]) -> Result<TimestampToken, SignError> {
         .to_vec();
     let serial = fields.get(3).ok_or_else(|| bad("TSTInfo has no serial number"))?.uint_bytes().to_vec();
     let gen_time = fields.get(4).ok_or_else(|| bad("TSTInfo has no generation time"))?.time()?;
-    let content_digest = digest.digest(&[info]);
+    // The signed messageDigest uses the SignerInfo's digest algorithm, which need not be the
+    // imprint's (RFC 5652 §5.4).
+    let content_digest = token.signer.digest.digest(&[info]);
     if token.signer.message_digest.as_deref() != Some(content_digest.as_slice()) {
         return Err(bad("token signed message digest does not match TSTInfo"));
     }

@@ -1,7 +1,7 @@
 //! `cargo xtask assets`: enforce the asset policy (AGENTS.md §1).
 //!
 //! `ATTRIBUTION.toml` lists every asset: committed or vendored files (`[[asset]]`), files that
-//! Cargo dependencies compile into PrintCraft (`[[bundled]]`), and files xtask downloads at build
+//! Cargo dependencies compile into PdfCraft (`[[bundled]]`), and files xtask downloads at build
 //! time (`[[fetched]]`). This gate fails when:
 //! - an asset-like file in the repository has no entry, or its SHA-256 differs;
 //! - a licence is not on the allowlist, or a declared licence file is missing;
@@ -46,7 +46,7 @@ pub const ADOBE_DATA_ALLOWED: &[(&str, &str)] = &[("hayro-cmap", "assets/cmaps.b
 /// File extensions that count as assets wherever they appear in the repository.
 const ASSET_EXTENSIONS: &[&str] = &[
     "png", "jpg", "jpeg", "gif", "svg", "ico", "icns", "webp", "bmp", "tif", "tiff", "avif", "heic", "ttf", "otf", "ttc", "woff", "woff2", "pfb",
-    "pfa", "afm", "icc", "icm", "pdf", "eps", "ps", "ai", "psd", "mp3", "wav", "ogg", "flac", "mp4", "mov", "webm", "cur", "ani", "brotli",
+    "pfa", "afm", "icc", "icm", "pdf", "eps", "ps", "ai", "psd", "mp3", "wav", "ogg", "flac", "mp4", "mov", "webm", "cur", "ani", "brotli", "tsv",
 ];
 
 #[derive(Deserialize, Default)]
@@ -58,6 +58,26 @@ pub struct Manifest {
     pub bundled: Vec<Bundled>,
     #[serde(default)]
     pub fetched: Vec<Fetched>,
+    #[serde(default)]
+    pub build_input: Vec<BuildInput>,
+}
+
+/// Material compiled in only when the builder opts in (e.g. `CRAFT_FONTS_DIR`): not in this
+/// repository, not downloaded by it. Its own repository attributes each file.
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct BuildInput {
+    pub name: String,
+    /// The environment variable that turns it on.
+    pub option: String,
+    pub title: String,
+    pub author: String,
+    pub source: String,
+    pub licence: String,
+    /// The input's own per-file attribution.
+    pub attribution: String,
+    pub kind: String,
+    pub usage: String,
 }
 
 #[derive(Deserialize)]
@@ -201,7 +221,9 @@ fn mentions_adobe(s: &str) -> bool {
 pub fn check(root: &Path, m: &Manifest, repo_files: &[String], lock: &BTreeSet<(String, String)>) -> Vec<String> {
     let mut problems = Vec::new();
     let mut seen = BTreeSet::new();
-    let visual = |kind: &str| matches!(kind, "icon" | "image" | "font" | "logo" | "cursor" | "video");
+    // Kinds that may never come from Adobe (AGENTS.md §1.1): visual design, and UI translations
+    // (which must be clean-room, never taken from a product's string tables).
+    let visual = |kind: &str| matches!(kind, "icon" | "image" | "font" | "logo" | "cursor" | "video" | "translation");
     let licence_ok = |what: &str, licence: &str, problems: &mut Vec<String>| {
         for id in licence_ids(licence) {
             if !ALLOWED_LICENCES.contains(&id) {
@@ -267,6 +289,15 @@ pub fn check(root: &Path, m: &Manifest, repo_files: &[String], lock: &BTreeSet<(
             problems.push(format!("{}: URLs must be https", f.file));
         }
     }
+    for b in &m.build_input {
+        licence_ok(&b.name, &b.licence, &mut problems);
+        if visual(&b.kind) && (mentions_adobe(&b.author) || mentions_adobe(&b.source) || mentions_adobe(&b.title)) {
+            problems.push(format!("{}: {} from Adobe is forbidden (AGENTS.md §1.1)", b.name, b.kind));
+        }
+        if !b.source.starts_with("https://") || !b.attribution.starts_with("https://") {
+            problems.push(format!("{}: URLs must be https", b.name));
+        }
+    }
     problems
 }
 
@@ -321,7 +352,7 @@ pub fn render_markdown(m: &Manifest) -> String {
     let mut s = String::new();
     s.push_str("# Attribution\n\n");
     s.push_str("<!-- Generated from ATTRIBUTION.toml by `cargo xtask assets --write`. Do not edit by hand. -->\n\n");
-    s.push_str("Every asset PrintCraft includes, bundles or uses to build its published material, with its author, source and licence. ");
+    s.push_str("Every asset PdfCraft includes, bundles or uses to build its published material, with its author, source and licence. ");
     s.push_str(
         "The policy is in [AGENTS.md](AGENTS.md) §1. The machine-readable list, with SHA-256 hashes, is [ATTRIBUTION.toml](ATTRIBUTION.toml). ",
     );
@@ -361,6 +392,24 @@ pub fn render_markdown(m: &Manifest) -> String {
     for f in &m.fetched {
         let _ = writeln!(s, "| `{}` | {} | {} | {} | {} | {} |", f.file, esc(&f.title), esc(&f.author), f.licence, esc(&f.source), esc(&f.usage));
     }
+    s.push_str(&format!(
+        "\n## Optional build inputs ({})\n\nNot in this repository and never downloaded by it: compiled in only when the build sets the option (official releases do). Each input attributes its own files.\n\n| Input | Option | Title | Author | Licence | Source | Attribution | Used for |\n|---|---|---|---|---|---|---|---|\n",
+        m.build_input.len()
+    ));
+    for b in &m.build_input {
+        let _ = writeln!(
+            s,
+            "| `{}` | `{}` | {} | {} | {} | {} | {} | {} |",
+            b.name,
+            b.option,
+            esc(&b.title),
+            esc(&b.author),
+            b.licence,
+            esc(&b.source),
+            esc(&b.attribution),
+            esc(&b.usage)
+        );
+    }
     s
 }
 
@@ -399,6 +448,25 @@ mod tests {
         }
     }
 
+    #[test]
+    fn build_inputs_need_an_open_licence_and_https_links() {
+        let input = |licence: &str, attribution: &str| BuildInput {
+            name: "craft-fonts".into(),
+            option: "CRAFT_FONTS_DIR".into(),
+            title: "t".into(),
+            author: "a".into(),
+            source: "https://github.com/storytold/craft-fonts".into(),
+            licence: licence.into(),
+            attribution: attribution.into(),
+            kind: "font".into(),
+            usage: "u".into(),
+        };
+        let check_one = |b: BuildInput| check(&root(), &Manifest { build_input: vec![b], ..Default::default() }, &[], &lock(&[]));
+        assert!(check_one(input("OFL-1.1", "https://example.org/ATTRIBUTION.md")).is_empty());
+        assert_eq!(check_one(input("LicenseRef-Proprietary", "https://example.org/A.md")).len(), 1);
+        assert_eq!(check_one(input("OFL-1.1", "ATTRIBUTION.md")).len(), 1);
+    }
+
     fn lock(entries: &[(&str, &str)]) -> BTreeSet<(String, String)> {
         entries.iter().map(|(a, b)| (a.to_string(), b.to_string())).collect()
     }
@@ -415,6 +483,15 @@ mod tests {
     fn unlisted_asset_is_rejected() {
         let p = check(&root(), &Manifest::default(), &["assets/icons/x.svg".into()], &lock(&[]));
         assert!(p.iter().any(|p| p.contains("no ATTRIBUTION.toml entry")), "{p:?}");
+    }
+
+    #[test]
+    fn translation_catalogs_require_attribution() {
+        assert!(is_asset_path("crates/ui-egui/src/i18n/ja.tsv"));
+        let p = check(&root(), &Manifest::default(), &["crates/ui-egui/src/i18n/ja.tsv".into()], &lock(&[]));
+        assert!(p.iter().any(|p| p.contains("no ATTRIBUTION.toml entry")), "{p:?}");
+        let m = Manifest { asset: vec![asset("crates/ui-egui/src/i18n/ja.tsv", "Adobe", "translation", "MIT")], ..Default::default() };
+        assert!(check(&root(), &m, &[], &lock(&[])).iter().any(|p| p.contains("from Adobe is forbidden")));
     }
 
     #[test]

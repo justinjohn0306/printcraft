@@ -1,11 +1,11 @@
 <#
 .SYNOPSIS
-  Build, sign and package PrintCraft for Windows.
+  Build, sign and package PdfCraft for Windows.
 
 .DESCRIPTION
   Produces, in $env:DIST (default: dist/release):
-    printcraft-<version>-windows-<arch>.msi            per-machine installer (WiX v5)
-    printcraft-<version>-windows-<arch>-portable.zip   printcraft.exe + printcraft-cli.exe
+    pdfcraft-<version>-windows-<arch>.msi            per-machine installer (WiX v5)
+    pdfcraft-<version>-windows-<arch>-portable.zip   pdfcraft.exe + pdfcraft-cli.exe
 
   The binaries link the C runtime statically (+crt-static), so neither the MSI nor the portable
   zip needs the Visual C++ redistributable. Signing is delegated to sign.ps1 (skipped with a
@@ -17,9 +17,10 @@
 .EXAMPLE
   pwsh packaging/windows/package.ps1 -Arch x64
   pwsh packaging/windows/package.ps1 -Arch x86 -SkipBuild
+  pwsh packaging/windows/package.ps1 -Arch arm64     # cross-compiled; needs the MSVC ARM64 build tools
 #>
 param(
-  [ValidateSet('x64', 'x86')] [string] $Arch = 'x64',
+  [ValidateSet('x64', 'x86', 'arm64')] [string] $Arch = 'x64',
   [switch] $SkipBuild
 )
 $ErrorActionPreference = 'Stop'
@@ -32,7 +33,7 @@ function Invoke-Native([string] $What, [scriptblock] $Block) {
 }
 
 # The version lives in one place: [workspace.package] version in the root Cargo.toml.
-$Version = $env:PRINTCRAFT_VERSION
+$Version = $env:PDFCRAFT_VERSION
 if (-not $Version) {
   $inPkg = $false
   foreach ($line in Get-Content (Join-Path $Root 'Cargo.toml')) {
@@ -44,15 +45,15 @@ if (-not $Version) { throw 'could not read [workspace.package] version from Carg
 # MSI ProductVersion is numeric (major.minor.build); pre-release tags are dropped there.
 $MsiVersion = ($Version -split '-')[0]
 
-$Target = if ($Arch -eq 'x64') { 'x86_64-pc-windows-msvc' } else { 'i686-pc-windows-msvc' }
+$Target = switch ($Arch) { 'x64' { 'x86_64-pc-windows-msvc' } 'x86' { 'i686-pc-windows-msvc' } 'arm64' { 'aarch64-pc-windows-msvc' } }
 $Dist = if ($env:DIST) { $env:DIST } else { Join-Path $Root 'dist\release' }
 $TargetDir = if ($env:CARGO_TARGET_DIR) { $env:CARGO_TARGET_DIR } else { Join-Path $Root 'target' }
 New-Item -ItemType Directory -Force -Path $Dist | Out-Null
 
-if (-not $env:PRINTCRAFT_BUILD_SHA) { $env:PRINTCRAFT_BUILD_SHA = (git -C $Root rev-parse HEAD 2>$null) }
-if (-not $env:PRINTCRAFT_BUILD_DATE) { $env:PRINTCRAFT_BUILD_DATE = (Get-Date).ToUniversalTime().ToString('yyyy-MM-dd') }
+if (-not $env:PDFCRAFT_BUILD_SHA) { $env:PDFCRAFT_BUILD_SHA = (git -C $Root rev-parse HEAD 2>$null) }
+if (-not $env:PDFCRAFT_BUILD_DATE) { $env:PDFCRAFT_BUILD_DATE = (Get-Date).ToUniversalTime().ToString('yyyy-MM-dd') }
 
-Write-Output "PrintCraft $Version for Windows $Arch ($Target)"
+Write-Output "PdfCraft $Version for Windows $Arch ($Target)"
 
 if (-not $SkipBuild) {
   # Static CRT: no VC++ redistributable needed. Scoped to the target so host build scripts and
@@ -60,44 +61,52 @@ if (-not $SkipBuild) {
   $flagVar = 'CARGO_TARGET_' + ($Target.ToUpper() -replace '-', '_') + '_RUSTFLAGS'
   [Environment]::SetEnvironmentVariable($flagVar, '-C target-feature=+crt-static')
   # Fail the build (rather than warn) if the icon/VERSIONINFO can't be embedded.
-  $env:PRINTCRAFT_REQUIRE_WINRES = '1'
-  Invoke-Native "cargo build ($Target)" { cargo build --release --locked -p printcraft -p printcraft-cli --target $Target }
+  $env:PDFCRAFT_REQUIRE_WINRES = '1'
+  Invoke-Native "cargo build ($Target)" { cargo build --release --locked -p pdfcraft -p pdfcraft-cli --target $Target }
 }
 
 $Bin = Join-Path $TargetDir "$Target\release"
 
-# The PE optional header's Subsystem field: 2 = Windows GUI, 3 = console. The app must be GUI (no
-# console window opens with it, #57); the CLI must stay console so its output reaches the terminal.
-function Get-PeSubsystem([string] $Path) {
+# Check both binaries' PE headers before packaging. Machine (COFF header) must match -Arch, so an
+# x64 build can never ship labelled arm64 (#61). Subsystem (optional header): 2 = Windows GUI,
+# 3 = console. The app must be GUI (no console window opens with it, #57); the CLI must stay
+# console so its output reaches the terminal.
+function Get-PeHeader([string] $Path) {
   $bytes = [System.IO.File]::ReadAllBytes($Path)
   $pe = [BitConverter]::ToInt32($bytes, 0x3C)
-  return [BitConverter]::ToUInt16($bytes, $pe + 0x5C)
+  return @{ Machine = [BitConverter]::ToUInt16($bytes, $pe + 4); Subsystem = [BitConverter]::ToUInt16($bytes, $pe + 0x5C) }
 }
-foreach ($check in @(@('printcraft.exe', 2), @('printcraft-cli.exe', 3))) {
-  $subsystem = Get-PeSubsystem (Join-Path $Bin $check[0])
-  if ($subsystem -ne $check[1]) { throw "$($check[0]) has PE subsystem $subsystem, expected $($check[1])" }
-  Write-Output "ok $($check[0]): PE subsystem $subsystem"
+$Machine = switch ($Arch) { 'x64' { 0x8664 } 'x86' { 0x14C } 'arm64' { 0xAA64 } }
+foreach ($check in @(@('pdfcraft.exe', 2), @('pdfcraft-cli.exe', 3))) {
+  $h = Get-PeHeader (Join-Path $Bin $check[0])
+  if ($h.Machine -ne $Machine) { throw "$($check[0]) is for machine 0x$('{0:X}' -f $h.Machine), expected 0x$('{0:X}' -f $Machine) ($Arch)" }
+  if ($h.Subsystem -ne $check[1]) { throw "$($check[0]) has PE subsystem $($h.Subsystem), expected $($check[1])" }
+  Write-Output "ok $($check[0]): $Arch, PE subsystem $($h.Subsystem)"
 }
 $Stage = Join-Path $TargetDir "windows-package\$Arch"
 Remove-Item -Recurse -Force $Stage -ErrorAction SilentlyContinue
 New-Item -ItemType Directory -Force -Path $Stage | Out-Null
-Copy-Item (Join-Path $Bin 'printcraft.exe'), (Join-Path $Bin 'printcraft-cli.exe') $Stage
+Copy-Item (Join-Path $Bin 'pdfcraft.exe'), (Join-Path $Bin 'pdfcraft-cli.exe') $Stage
 
-& (Join-Path $PSScriptRoot 'sign.ps1') (Join-Path $Stage 'printcraft.exe') (Join-Path $Stage 'printcraft-cli.exe')
+& (Join-Path $PSScriptRoot 'sign.ps1') (Join-Path $Stage 'pdfcraft.exe') (Join-Path $Stage 'pdfcraft-cli.exe')
 
 # ---- MSI ---------------------------------------------------------------------------------------
-$Msi = Join-Path $Dist "printcraft-$Version-windows-$Arch.msi"
+$Msi = Join-Path $Dist "pdfcraft-$Version-windows-$Arch.msi"
 Invoke-Native 'wix build' {
-  wix build (Join-Path $PSScriptRoot 'printcraft.wxs') -arch $Arch `
-    -d "Version=$MsiVersion" -d "BinDir=$Stage" -d "IconPath=$(Join-Path $Root 'assets\app-icon\printcraft.ico')" `
+  wix build (Join-Path $PSScriptRoot 'pdfcraft.wxs') -arch $Arch `
+    (Join-Path $PSScriptRoot 'installer-ui.wxs') `
+    -d "Version=$MsiVersion" -d "BinDir=$Stage" -d "IconPath=$(Join-Path $Root 'assets\app-icon\pdfcraft.ico')" `
     -o $Msi
 }
+# Inspect the built MSI, not just the XML, before signing/publishing it. In a child process, so
+# its Windows Installer database handle is gone before signtool opens the MSI.
+Invoke-Native 'test-msi' { & (Get-Process -Id $PID).Path -NoProfile -File (Join-Path $PSScriptRoot 'test-msi.ps1') $Msi }
 # wix writes its debug symbols (.wixpdb) next to the MSI; keep them out of the release assets.
 Remove-Item -Force -ErrorAction SilentlyContinue ([IO.Path]::ChangeExtension($Msi, '.wixpdb'))
 & (Join-Path $PSScriptRoot 'sign.ps1') $Msi
 
 # ---- portable zip ------------------------------------------------------------------------------
-$Portable = Join-Path $TargetDir "windows-package\printcraft-$Version-windows-$Arch-portable"
+$Portable = Join-Path $TargetDir "windows-package\pdfcraft-$Version-windows-$Arch-portable"
 Remove-Item -Recurse -Force $Portable -ErrorAction SilentlyContinue
 New-Item -ItemType Directory -Force -Path $Portable | Out-Null
 Copy-Item (Join-Path $Stage '*.exe') $Portable
@@ -105,9 +114,24 @@ foreach ($f in 'README.md', 'LICENSE', 'LICENSE-MIT', 'LICENSE-APACHE') {
   $p = Join-Path $Root $f
   if (Test-Path $p) { Copy-Item $p $Portable }
 }
-$Zip = Join-Path $Dist "printcraft-$Version-windows-$Arch-portable.zip"
+# Builds made with craft-fonts (CRAFT_FONTS_DIR, set for every release) embed its fonts: ship their
+# licences, fonts\<family>\OFL.txt -> OFL-<family>.txt.
+if ($env:CRAFT_FONTS_DIR) {
+  Get-ChildItem -Path (Join-Path $env:CRAFT_FONTS_DIR 'fonts') -Directory -ErrorAction SilentlyContinue | ForEach-Object {
+    $ofl = Join-Path $_.FullName 'OFL.txt'
+    if (Test-Path $ofl) { Copy-Item $ofl (Join-Path $Portable "OFL-$($_.Name).txt") }
+  }
+}
+$Zip = Join-Path $Dist "pdfcraft-$Version-windows-$Arch-portable.zip"
 Remove-Item -Force $Zip -ErrorAction SilentlyContinue
 Compress-Archive -Path $Portable -DestinationPath $Zip
 
-Invoke-Native 'printcraft-cli --version' { & (Join-Path $Stage 'printcraft-cli.exe') --version }
+# Smoke-test the CLI when this machine can run it. An ARM64 build made on an x64 runner can't run
+# here; .github/workflows/windows-arm64.yml installs and runs it on ARM64 instead.
+$HostArch = [System.Runtime.InteropServices.RuntimeInformation]::OSArchitecture.ToString().ToLowerInvariant()
+if ($Arch -ne 'arm64' -or $HostArch -eq 'arm64') {
+  Invoke-Native 'pdfcraft-cli --version' { & (Join-Path $Stage 'pdfcraft-cli.exe') --version }
+} else {
+  Write-Output "skipping pdfcraft-cli --version: an $Arch build doesn't run on this $HostArch machine"
+}
 Get-Item $Msi, $Zip | Format-Table Name, Length

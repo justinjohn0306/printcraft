@@ -55,7 +55,7 @@ impl Tokens {
                 divider: Color32::from_rgb(0xE8, 0xE8, 0xEB),
                 text: Color32::from_rgb(0x22, 0x22, 0x26),
                 text_muted: Color32::from_rgb(0x5E, 0x5E, 0x66),
-                text_faint: Color32::from_rgb(0x8E, 0x8E, 0x96),
+                text_faint: Color32::from_rgb(0x6B, 0x6B, 0x73),
                 icon: Color32::from_rgb(0x44, 0x44, 0x4B),
                 hover: Color32::from_rgb(0xF0, 0xF0, 0xF3),
                 pressed: Color32::from_rgb(0xE4, 0xE4, 0xE9),
@@ -79,7 +79,7 @@ impl Tokens {
                 divider: Color32::from_rgb(0x33, 0x33, 0x39),
                 text: Color32::from_rgb(0xEC, 0xEC, 0xEF),
                 text_muted: Color32::from_rgb(0xAE, 0xAE, 0xB6),
-                text_faint: Color32::from_rgb(0x80, 0x80, 0x89),
+                text_faint: Color32::from_rgb(0x97, 0x97, 0x9E),
                 icon: Color32::from_rgb(0xD4, 0xD4, 0xDA),
                 hover: Color32::from_rgb(0x34, 0x34, 0x3A),
                 pressed: Color32::from_rgb(0x3E, 0x3E, 0x45),
@@ -96,7 +96,7 @@ impl Tokens {
     }
 
     pub fn get(ctx: &egui::Context) -> Self {
-        ctx.data(|d| d.get_temp::<Tokens>(egui::Id::new("printcraft-theme"))).unwrap_or_else(|| Self::for_kind(ThemeKind::Light))
+        ctx.data(|d| d.get_temp::<Tokens>(egui::Id::new("pdfcraft-theme"))).unwrap_or_else(|| Self::for_kind(ThemeKind::Light))
     }
 
     pub fn dark(&self) -> bool {
@@ -105,6 +105,28 @@ impl Tokens {
 }
 
 pub fn install_fonts(ctx: &egui::Context) {
+    ctx.set_fonts(font_definitions());
+}
+
+/// Install the interface fonts with the CJK fallback order for the UI language (Chinese
+/// first for Simplified Chinese, Japanese first otherwise). Call it when the language
+/// changes; the new faces take effect next frame.
+pub fn install_fonts_for(ctx: &egui::Context, prefer_hans: bool) {
+    ctx.set_fonts(font_definitions_for(prefer_hans));
+}
+
+/// The interface fonts: Inter (and JetBrains Mono for code) first, then egui's defaults, then
+/// the CJK faces of the optional craft-fonts build input as the last fallback in every family.
+/// Without craft-fonts there is no Japanese or Chinese face.
+pub fn font_definitions() -> FontDefinitions {
+    font_definitions_for(false)
+}
+
+/// [`font_definitions`] with the CJK fallback order for the UI language. Simplified Chinese
+/// must come first in Chinese mode: otherwise shared characters render in the Japanese face
+/// while Simplified-only characters (e.g. U+6B22 欢) fall through to the Chinese face, and
+/// the mixed vertical metrics sink them below the line.
+pub fn font_definitions_for(prefer_hans: bool) -> FontDefinitions {
     let mut fonts = FontDefinitions::default();
     let add = |fonts: &mut FontDefinitions, name: &str, bytes: &'static [u8]| {
         fonts.font_data.insert(name.to_owned(), Arc::new(FontData::from_static(bytes)));
@@ -113,19 +135,26 @@ pub fn install_fonts(ctx: &egui::Context) {
     add(&mut fonts, "Inter-Medium", include_bytes!("../../../assets/fonts/Inter-Medium.ttf"));
     add(&mut fonts, "Inter-SemiBold", include_bytes!("../../../assets/fonts/Inter-SemiBold.ttf"));
     add(&mut fonts, "JetBrainsMono", include_bytes!("../../../assets/fonts/JetBrainsMono-Regular.ttf"));
-    // The same bytes printcraft-fonts embeds for Japanese text in PDFs: one 8.7 MB copy, not two.
-    add(&mut fonts, "ShipporiMincho", printcraft_fonts::SHIPPORI_MINCHO);
     fonts.families.entry(FontFamily::Proportional).or_default().insert(0, "Inter".to_owned());
-    fonts.families.entry(FontFamily::Proportional).or_default().push("ShipporiMincho".to_owned());
     fonts.families.entry(FontFamily::Monospace).or_default().insert(0, "JetBrainsMono".to_owned());
-    fonts.families.entry(FontFamily::Monospace).or_default().push("ShipporiMincho".to_owned());
+    // The same static bytes pdfcraft-fonts uses for Japanese/Chinese text in PDFs: one copy, not two.
+    for face in pdfcraft_fonts::ui_cjk_fonts(prefer_hans) {
+        let name = face.name();
+        // Japanese and Chinese faces have distinct family names, so no collision here.
+        if !fonts.font_data.contains_key(&name) {
+            add(&mut fonts, &name, face.bytes);
+        }
+        for family in [FontFamily::Proportional, FontFamily::Monospace] {
+            fonts.families.entry(family).or_default().push(name.clone());
+        }
+    }
     let fallback: Vec<String> = fonts.families[&FontFamily::Proportional].clone();
     for (fam, primary) in [("medium", "Inter-Medium"), ("semibold", "Inter-SemiBold")] {
         let mut stack = vec![primary.to_owned()];
         stack.extend(fallback.iter().cloned());
         fonts.families.insert(FontFamily::Name(fam.into()), stack);
     }
-    ctx.set_fonts(fonts);
+    fonts
 }
 
 pub fn regular(size: f32) -> FontId {
@@ -140,7 +169,7 @@ pub fn semibold(size: f32) -> FontId {
 
 pub fn apply(ctx: &egui::Context, kind: ThemeKind) {
     let t = Tokens::for_kind(kind);
-    ctx.data_mut(|d| d.insert_temp(egui::Id::new("printcraft-theme"), t));
+    ctx.data_mut(|d| d.insert_temp(egui::Id::new("pdfcraft-theme"), t));
     let mut v = if t.dark() { Visuals::dark() } else { Visuals::light() };
     v.panel_fill = t.panel;
     v.window_fill = t.card;
@@ -169,6 +198,15 @@ pub fn apply(ctx: &egui::Context, kind: ThemeKind) {
     v.widgets.active.weak_bg_fill = t.pressed;
     v.widgets.active.bg_fill = t.pressed;
     v.widgets.open.weak_bg_fill = t.hover;
+    // Crisper text at 100–150 % scaling (#76): glyphs sit on whole pixels instead of being
+    // rendered at quarter-pixel offsets, which egui notes blurs them. In the light theme, a mild
+    // gamma darkens the antialiased edges of dark text (egui's default is linear, which reads thin
+    // and grey next to the system's text); the dark theme keeps egui's own curve. At 200 % both
+    // make little difference.
+    v.text_options.subpixel_binning = false;
+    if !t.dark() {
+        v.text_options.color_transfer_function = egui::epaint::FontColorTransferFunction::Gamma(0.75);
+    }
     ctx.set_visuals(v);
     ctx.global_style_mut(|s| {
         s.spacing.item_spacing = egui::vec2(8.0, 6.0);
@@ -182,4 +220,36 @@ pub fn apply(ctx: &egui::Context, kind: ThemeKind) {
         s.text_styles.insert(egui::TextStyle::Heading, semibold(17.0));
         s.interaction.tooltip_delay = 0.35;
     });
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// WCAG 2 contrast ratio between two opaque colours.
+    fn contrast(a: Color32, b: Color32) -> f32 {
+        let lum = |c: Color32| {
+            let lin = |v: u8| {
+                let s = v as f32 / 255.0;
+                if s <= 0.04045 { s / 12.92 } else { ((s + 0.055) / 1.055).powf(2.4) }
+            };
+            0.2126 * lin(c.r()) + 0.7152 * lin(c.g()) + 0.0722 * lin(c.b())
+        };
+        let (x, y) = (lum(a) + 0.05, lum(b) + 0.05);
+        x.max(y) / x.min(y)
+    }
+
+    #[test]
+    fn text_is_readable_on_every_surface() {
+        // #76: the faintest text (hints, zoom level, captions) was 3.3:1 in the light theme.
+        for kind in [ThemeKind::Light, ThemeKind::Dark] {
+            let t = Tokens::for_kind(kind);
+            for (name, fg) in [("text", t.text), ("text_muted", t.text_muted), ("text_faint", t.text_faint)] {
+                for bg in [t.chrome, t.panel, t.card, t.pasteboard] {
+                    let r = contrast(fg, bg);
+                    assert!(r >= 4.5, "{kind:?} {name} on {bg:?}: {r:.2}:1, WCAG AA needs 4.5:1");
+                }
+            }
+        }
+    }
 }

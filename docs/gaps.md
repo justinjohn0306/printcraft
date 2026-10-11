@@ -1,6 +1,6 @@
 # Where PdfCraft falls short of Acrobat Pro
 
-> **Last reviewed:** 2026-10-10 · **Last updated:** 2026-10-10 · **Change:** minor (alpha markers removed after the gate was re-judged: no gap blocks alpha) · **Target:** Adobe Acrobat Pro (Acrobat DC, continuous track 26.002.21931, macOS)
+> **Last reviewed:** 2026-10-11 · **Last updated:** 2026-10-11 · **Change:** minor (gap 5: desktop CJK runtime fallback shipped; only the web build and CJK-less machines remain) · **Target:** Adobe Acrobat Pro (Acrobat DC, continuous track 26.002.21931, macOS)
 
 Every known shortfall, one entry each, ranked by what it costs users. This is the work list: agents
 choose from the top unless the owner says otherwise, and prefer these over new P2/P3 checklist
@@ -107,7 +107,11 @@ update the numbers.
 
 ### 5. Chinese UI shows missing-glyph boxes in releases
 
-- **Missing:** a Simplified Chinese (`Hans`) UI face in release builds and a working fallback.
+- **Missing:** a Simplified Chinese (`Hans`) UI face embedded in release builds. The desktop
+  runtime fallback is done: `crates/ui-egui/src/system_fonts.rs` now loads an installed CJK face
+  (Microsoft YaHei, PingFang, Noto CJK, …) as a last resort, so desktop releases show readable
+  Chinese when the OS has a CJK font. Still open: the web build and any desktop machine with no
+  CJK font installed, which need an openly licensed `Hans` face bundled in craft-fonts.
 - **Evidence:** [#826](https://github.com/storytold/pdfcraft/issues/826),
   [#688](https://github.com/storytold/pdfcraft/issues/688),
   [#728](https://github.com/storytold/pdfcraft/issues/728),
@@ -116,7 +120,7 @@ update the numbers.
   CJK (Source Han rebranded), so craft-fonts needs another openly licensed Hans face.
 - **Impact:** the second-largest language group sees a broken interface although the catalog is 97%
   translated.
-- **Estimate:** 6–12 h (font sourcing in craft-fonts plus the fallback chain). **Doc:**
+- **Estimate:** 4–8 h remaining (font sourcing in craft-fonts for the web build). **Doc:**
   [localization-parity.md](localization-parity.md).
 
 ### 6. Open-issue backlog of wrong results in shipped features
@@ -300,6 +304,7 @@ update the numbers.
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-10-11 | minor | Gap 5 (#826): the desktop installed-font fallback now loads a CJK face (YaHei/PingFang/Noto CJK), so Chinese UI renders on machines with a CJK font; only the web build and CJK-less desktops still need a bundled `Hans` face |
 | 2026-10-10 | minor | Removed the alpha markers: with the cross-app gate rule, gaps 1 and 8 are partial sub-cases, not blockers; stage alpha |
 | 2026-10-10 | minor | Marked the alpha blockers (gap 1 and the Office part of gap 8) after the core-workflow gate put the stage at pre-alpha |
 | 2026-10-10 | major | Created. Ranked 24 gaps from the 2026-10-10 re-measure, the open GitHub issues and the former ROADMAP.md §Where we're lacking and where we're going (renderer, hardening, fidelity, editing, Pro workflows, 1.0 polish), which this file replaces |

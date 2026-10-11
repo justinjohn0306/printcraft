@@ -124,20 +124,26 @@ fn telugu_ui_text_uses_craft_fonts() {
     }
 }
 
-/// On a machine with a suitable installed font, the installed definitions end every family
-/// with it and Arabic text has glyphs; the embedded-only definitions never name it.
+/// On a machine with suitable installed fonts, the installed definitions end every family with
+/// the `system-fallback-*` faces and Arabic text has glyphs; the embedded-only definitions never
+/// name them. When a CJK system font is present, Simplified Chinese UI text has glyphs too — the
+/// last resort for issue #826 in a build whose craft-fonts input lacks a Hans face.
 #[test]
 fn system_fallback_fills_missing_scripts() {
-    assert!(!theme::font_definitions().font_data.contains_key(theme::SYSTEM_FALLBACK));
+    let is_fallback = |n: &str| n == theme::SYSTEM_FALLBACK || n.starts_with(&format!("{}-", theme::SYSTEM_FALLBACK));
+    assert!(theme::font_definitions().font_data.keys().all(|n| !is_fallback(n)));
     let defs = theme::installed_font_definitions(false);
-    if !defs.font_data.contains_key(theme::SYSTEM_FALLBACK) {
+    let count = defs.font_data.keys().filter(|n| is_fallback(n)).count();
+    if count == 0 {
         eprintln!("skipping system_fallback_fills_missing_scripts: no installed fallback font (or PDFCRAFT_SYSTEM_FONTS=0)");
-        assert!(defs.families.values().all(|stack| !stack.iter().any(|n| n == theme::SYSTEM_FALLBACK)));
+        assert!(defs.families.values().all(|stack| !stack.iter().any(|n| is_fallback(n))));
         return;
     }
+    // Every installed face is appended, in order, to the end of every family exactly once.
     for (family, stack) in &defs.families {
-        assert_eq!(stack.last().map(String::as_str), Some(theme::SYSTEM_FALLBACK), "{family:?}: {stack:?}");
-        assert_eq!(stack.iter().filter(|n| *n == theme::SYSTEM_FALLBACK).count(), 1, "{family:?}");
+        let tail: Vec<&String> = stack.iter().rev().take(count).rev().collect();
+        assert!(tail.iter().all(|n| is_fallback(n)), "{family:?}: {stack:?}");
+        assert_eq!(stack.iter().filter(|n| is_fallback(n)).count(), count, "{family:?}");
     }
     let mut fonts = Fonts::new(TextOptions::default(), defs);
     for id in families() {
@@ -145,6 +151,14 @@ fn system_fallback_fills_missing_scripts() {
         assert!(fonts.has_glyphs(&id, "PdfCraft"), "{id:?}");
     }
     assert!(layout_widths(&mut fonts, ARABIC).iter().all(|w| w.is_finite() && *w > 0.0));
+    // A CJK system font (Microsoft YaHei, PingFang, Noto CJK, ...) covers Simplified Chinese;
+    // when one is installed the UI no longer renders tofu boxes for #826.
+    if fonts.has_glyphs(&FontId::proportional(13.0), "欢") {
+        for id in families() {
+            assert!(fonts.has_glyphs(&id, CHINESE), "{id:?} lacks {CHINESE}");
+        }
+        assert!(layout_widths(&mut fonts, CHINESE).iter().all(|w| w.is_finite() && *w > 0.0));
+    }
 }
 
 /// Without craft-fonts the interface fonts still install and lay out any text (Japanese falls

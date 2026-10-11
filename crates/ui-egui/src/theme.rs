@@ -141,21 +141,23 @@ pub fn install_fonts_for(ctx: &egui::Context, prefer_hans: bool) {
     ctx.set_fonts(installed_font_definitions(prefer_hans));
 }
 
-/// The name of the installed face [`installed_font_definitions`] may add after the embedded ones.
+/// Prefix of the installed-face names [`installed_font_definitions`] may add after the embedded
+/// ones; each installed face is `{SYSTEM_FALLBACK}-{index}`.
 pub const SYSTEM_FALLBACK: &str = "system-fallback";
 
-/// What [`install_fonts_for`] installs: [`font_definitions_for`], then, on desktop, one face
-/// already installed on this machine as the last fallback of every family. It only draws
-/// characters no embedded face has (an Arabic file name in a build without craft-fonts);
-/// `PDFCRAFT_SYSTEM_FONTS=0` leaves it out.
+/// What [`install_fonts_for`] installs: [`font_definitions_for`], then, on desktop, the faces
+/// already installed on this machine as the last fallbacks of every family — one per script the
+/// embedded faces may not cover (an Arabic file name, or Chinese UI labels when craft-fonts has
+/// no Hans face). `PDFCRAFT_SYSTEM_FONTS=0` leaves them out.
 pub fn installed_font_definitions(prefer_hans: bool) -> FontDefinitions {
     #[cfg_attr(target_arch = "wasm32", expect(unused_mut))]
     let mut fonts = font_definitions_for(prefer_hans);
     #[cfg(not(target_arch = "wasm32"))]
-    if let Some(data) = crate::system_fonts::fallback() {
-        fonts.font_data.insert(SYSTEM_FALLBACK.to_owned(), data);
+    for (i, data) in crate::system_fonts::fallback().into_iter().enumerate() {
+        let name = format!("{SYSTEM_FALLBACK}-{i}");
+        fonts.font_data.insert(name.clone(), data);
         for stack in fonts.families.values_mut() {
-            stack.push(SYSTEM_FALLBACK.to_owned());
+            stack.push(name.clone());
         }
     }
     fonts
